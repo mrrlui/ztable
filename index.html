@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Standard Normal (Z) Table</title>
+    <!--
+    FEATURES INCLUDED:
+    - Accurate standard normal table generated dynamically via JS (no hardcoded data).
+    - Fully interactive SVG graph with draggable z-marker and dynamic shading.
+    - Synchronized dual-binding: dragging marker updates table; clicking table updates marker.
+    - Hover/focus states with sticky headers and crosshair highlighting.
+    - Mode switching between z → probability and probability → z.
+    - Step-by-step coaching panel revealing instructions progressively.
+    - Practice mode generating random questions with tolerance-based answer checking.
+    - Presentation mode for classroom projection.
+    - Print mode hiding UI controls and keeping the table crisp and legible.
+
+    ASSUMPTIONS BASED ON ATTACHED `normal_table.pdf`[cite: 1]:
+    - The table provided is an "Area from Mean" table[cite: 1], displaying the area under the standard normal curve between 0 and z for positive z values[cite: 1].
+    - The row range is exactly 0.0 to 3.5[cite: 1].
+    - The column range is exactly .00 to .09[cite: 1].
+    - Negative z-values are evaluated using the symmetry of the curve as noted in the source footnote[cite: 1], meaning if z = -1.5 is entered, the table highlights +1.5.
+    - Values are rounded to 4 decimal places without leading zeros for exact visual matching to standard statistical tables[cite: 1].
+    -->
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-light: #eff6ff;
+            --accent: #f59e0b;
+            --text-dark: #1e293b;
+            --text-muted: #64748b;
+            --border: #cbd5e1;
+            --bg-body: #f8fafc;
+            --bg-panel: #ffffff;
+            --highlight-rowcol: #e0e7ff;
+            --highlight-cell: #fef08a;
+            --success: #22c55e;
+            --danger: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-body);
+            color: var(--text-dark);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Layout */
+        header {
+            background: white;
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        h1 { margin: 0; font-size: 1.25rem; }
+
+        .header-controls button {
+            margin-left: 10px;
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .header-controls button:hover { background: var(--primary-light); }
+
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            flex-direction: row;
+        }
+
+        /* Table Panel */
+        .table-panel {
+            flex: 1;
+            max-width: 50%;
+            overflow: auto;
+            background: white;
+            border-right: 1px solid var(--border);
+            position: relative;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            font-size: 0.95rem;
+        }
+
+        th, td {
+            padding: 6px 8px;
+            border: 1px solid #e2e8f0;
+            cursor: pointer;
+        }
+
+        th {
+            background-color: #f1f5f9;
+            font-weight: 600;
+            color: var(--text-muted);
+            position: sticky;
+        }
+
+        thead th { top: 0; z-index: 2; border-bottom: 2px solid var(--text-muted); text-align: center; }
+        tbody th { left: 0; z-index: 1; border-right: 2px solid var(--text-muted); text-align: center; }
+        thead th:first-child { z-index: 3; left: 0; }
+
+        td:hover, td:focus {
+            background-color: var(--primary-light);
+            outline: none;
+        }
+
+        /* Highlighting Logic */
+        .hl-row, .hl-col { background-color: var(--highlight-rowcol); }
+        .hl-cell {
+            background-color: var(--highlight-cell);
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+            font-weight: bold;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+        }
+
+        /* Tooltip */
+        #tooltip {
+            position: fixed;
+            background: rgba(15, 23, 42, 0.9);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.1s;
+            z-index: 100;
+            transform: translate(-50%, -150%);
+        }
+
+        /* Interactive Panel */
+        .interactive-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            padding: 20px;
+            background: var(--bg-body);
+        }
+
+        .card {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+
+        /* Graph */
+        .graph-container {
+            width: 100%;
+            height: 250px;
+            position: relative;
+            user-select: none;
+        }
+        svg { width: 100%; height: 100%; overflow: visible; }
+        .curve { fill: none; stroke: var(--primary); stroke-width: 3; }
+        .axis { stroke: var(--text-dark); stroke-width: 1.5; }
+        .tick { stroke: var(--text-muted); stroke-width: 1; }
+        .tick-label { font-size: 12px; fill: var(--text-muted); text-anchor: middle; }
+        
+        .shade-left, .shade-right, .shade-mid { fill: var(--primary); opacity: 0.2; transition: d 0.1s; }
+        .shade-active { opacity: 0.5; fill: var(--accent); }
+
+        .z-marker {
+            stroke: var(--accent);
+            stroke-width: 2;
+            cursor: ew-resize;
+        }
+        .z-handle {
+            fill: var(--accent);
+            cursor: ew-resize;
+            transition: r 0.2s;
+        }
+        .z-handle:hover { r: 10; }
+
+        .mean-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 4; }
+
+        /* Controls & Readouts */
+        .readouts {
+            display: flex;
+            justify-content: space-around;
+            text-align: center;
+            margin-top: 10px;
+            font-size: 1.1rem;
+        }
+        .readout-box {
+            padding: 10px;
+            border-radius: 6px;
+            background: var(--primary-light);
+            min-width: 120px;
+        }
+        .readout-box.active {
+            background: #fef3c7;
+            border: 1px solid #fcd34d;
+            font-weight: bold;
+        }
+        .readout-label { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 4px; }
+
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        input[type="number"] {
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            width: 100px;
+            font-size: 1rem;
+        }
+        
+        .toggle-btn {
+            padding: 8px 16px;
+            border: 1px solid var(--primary);
+            background: white;
+            color: var(--primary);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .toggle-btn.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* Coaching Panel */
+        .step-list { list-style: none; padding: 0; margin: 10px 0; }
+        .step-item {
+            padding: 8px 12px;
+            margin-bottom: 6px;
+            background: #f8fafc;
+            border-left: 3px solid var(--border);
+            opacity: 0.4;
+            display: none;
+        }
+        .step-item.revealed { display: block; opacity: 1; border-left-color: var(--primary); }
+        .step-item.active-step { border-left-color: var(--accent); background: #fffbeb; }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .btn-primary:hover { background: #1d4ed8; }
+
+        /* Practice Panel */
+        .practice-panel { display: none; }
+        .practice-panel.active { display: block; }
+        .feedback { margin-top: 10px; font-weight: bold; }
+        .feedback.success { color: var(--success); }
+        .feedback.error { color: var(--danger); }
+
+        /* Presentation Mode */
+        body.presentation-mode .table-panel { max-width: 40%; }
+        body.presentation-mode .interactive-panel { max-width: 60%; font-size: 1.25rem; }
+        body.presentation-mode .graph-container { height: 350px; }
+        body.presentation-mode h1, body.presentation-mode .header-controls button { font-size: 1.25rem; }
+        body.presentation-mode .practice-panel, body.presentation-mode .coaching-card { display: none !important; }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            .main-container { flex-direction: column-reverse; overflow: auto; }
+            .table-panel { max-width: 100%; max-height: 50vh; overflow-y: auto; }
+            .interactive-panel { overflow: visible; }
+            .readouts { flex-direction: column; gap: 10px; }
+            body { height: auto; overflow: auto; }
+        }
+
+        /* Print Mode */
+        @media print {
+            body { height: auto; overflow: visible; background: white; }
+            .interactive-panel, header { display: none !important; }
+            .table-panel { max-width: 100%; border: none; overflow: visible; }
+            th { position: static; color: black; border-color: #999; }
+            td { border-color: #999; color: black; }
+            .hl-cell { animation: none; outline: 2px solid black; background: #ddd !important; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Interactive Z-Table</h1>
+        <div class="header-controls">
+            <button onclick="toggleHelp()">How to Use</button>
+            <button onclick="togglePresentation()">Presentation Mode</button>
+            <button onclick="window.print()">Print Table</button>
+        </div>
+    </header>
+
+    <!-- Help Overlay (hidden by default) -->
+    <div id="helpPanel" style="display:none; padding: 15px 20px; background: #fef2f2; border-bottom: 1px solid #fca5a5;">
+        <strong>For Teachers & Students:</strong> 
+        The table shows the area between 0 and z, mirroring the attached standard normal distribution table[cite: 1].
+        <ul>
+            <li><strong>Z &rarr; Probability:</strong> Drag the marker, click a table cell, or type a z-score to see the corresponding areas.</li>
+            <li><strong>Probability &rarr; Z:</strong> Switch modes, type a target left-tail probability, and locate the closest cell to assemble the z-score.</li>
+        </ul>
+        <button onclick="toggleHelp()" style="font-size:0.8rem; padding: 4px 8px;">Close</button>
+    </div>
+
+    <div class="main-container">
+        <!-- Z-Table Panel -->
+        <div class="table-panel">
+            <table id="zTable">
+                <!-- Generated by JS -->
+            </table>
+        </div>
+
+        <!-- Interactive Panel -->
+        <div class="interactive-panel">
+            
+            <div class="card graph-card">
+                <div class="control-group">
+                    <button class="toggle-btn active" id="modeZtoP" onclick="setMode('ZtoP')">z &rarr; Probability</button>
+                    <button class="toggle-btn" id="modePtoZ" onclick="setMode('PtoZ')">Probability &rarr; z</button>
+                </div>
+
+                <div class="control-group" id="inputZGroup">
+                    <label><strong>z-score:</strong></label>
+                    <input type="number" id="zInput" step="0.01" min="-3.99" max="3.99" value="1.00">
+                </div>
+
+                <div class="control-group" id="inputPGroup" style="display:none;">
+                    <label><strong>Target P(Z < z):</strong></label>
+                    <input type="number" id="pInput" step="0.0001" min="0.0001" max="0.9999" value="0.8413">
+                    <button class="btn-primary" onclick="checkPtoZ()">Check Answer</button>
+                    <button class="btn-primary" style="background:#64748b" onclick="revealPtoZ()">Reveal</button>
+                </div>
+
+                <div class="graph-container">
+                    <svg id="svgGraph" viewBox="0 0 800 250" preserveAspectRatio="none">
+                        <!-- Shaded regions -->
+                        <path id="shadeLeft" class="shade-left"></path>
+                        <path id="shadeMid" class="shade-mid"></path>
+                        <path id="shadeRight" class="shade-right"></path>
+                        
+                        <!-- Axes and Curve -->
+                        <line x1="0" y1="210" x2="800" y2="210" class="axis"></line>
+                        <line x1="400" y1="10" x2="400" y2="210" class="mean-line"></line>
+                        <path id="bellCurve" class="curve"></path>
+                        
+                        <!-- Ticks generated by JS -->
+                        <g id="ticks"></g>
+
+                        <!-- Draggable Marker -->
+                        <g id="markerGroup">
+                            <line id="markerLine" class="z-marker" x1="400" y1="10" x2="400" y2="210"></line>
+                            <circle id="markerHandle" class="z-handle" cx="400" cy="10" r="6"></circle>
+                            <text id="markerLabel" x="400" y="235" text-anchor="middle" font-weight="bold" font-size="14">z = 0.00</text>
+                        </g>
+                    </svg>
+                </div>
+
+                <div class="readouts" id="readoutsArea">
+                    <div class="readout-box active" id="roLeft" onclick="setShadingMode('left')" style="cursor:pointer">
+                        <div class="readout-label">Left Tail P(Z < z)</div>
+                        <div id="valLeft">0.8413</div>
+                    </div>
+                    <div class="readout-box" id="roMid" onclick="setShadingMode('mid')" style="cursor:pointer">
+                        <div class="readout-label">From Mean P(0 < Z < |z|)</div>
+                        <div id="valMid">0.3413</div>
+                        <div style="font-size:0.7rem; color:var(--text-muted)">(Table Value)</div>
+                    </div>
+                    <div class="readout-box" id="roRight" onclick="setShadingMode('right')" style="cursor:pointer">
+                        <div class="readout-label">Right Tail P(Z > z)</div>
+                        <div id="valRight">0.1587</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card coaching-card">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin:0">Show Your Work</h3>
+                    <div>
+                        <button class="btn-primary" onclick="nextStep()" style="background:#3b82f6; padding: 4px 8px; font-size:0.85rem">Next Step</button>
+                        <button class="btn-primary" onclick="resetSteps()" style="background:#94a3b8; padding: 4px 8px; font-size:0.85rem">Reset</button>
+                    </div>
+                </div>
+                <ul class="step-list" id="stepList">
+                    <!-- Steps injected by JS -->
+                </ul>
+            </div>
+
+            <div class="card practice-panel active" id="practicePanel">
+                <h3 style="margin:0 0 10px 0">Practice Mode</h3>
+                <button class="btn-primary" onclick="generateQuestion()">New Question</button>
+                <div id="questionText" style="margin: 15px 0; font-size: 1.1rem;">Click 'New Question' to start.</div>
+                <div id="answerArea" style="display:none; align-items: center; gap: 10px;">
+                    <input type="number" id="practiceInput" placeholder="Answer..." step="0.0001">
+                    <button class="btn-primary" onclick="checkPractice()">Submit</button>
+                    <span id="practiceFeedback" class="feedback"></span>
+                </div>
+                <div style="margin-top:10px; font-size:0.9rem; color:var(--text-muted)">
+                    Score: <span id="scoreDisplay">0</span> (Streak: <span id="streakDisplay">0</span>)
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <div id="tooltip"></div>
+
+    <script>
+        /* --- Math Utilities (Accurate Normal CDF) --- */
+        
+        // Abramowitz and Stegun approximation for standard normal CDF
+        function normalCDF(z) {
+            const sign = (z >= 0) ? 1 : -1;
+            const x = Math.abs(z) / Math.sqrt(2);
+            const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741;
+            const a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+            const t = 1.0 / (1.0 + p * x);
+            const y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+            const erf = sign * y;
+            return 0.5 * (1 + erf);
+        }
+
+        // PDF for drawing the bell curve
+        function normalPDF(z) {
+            return (1 / Math.sqrt(2 * Math.PI)) * Math.exp(-0.5 * z * z);
+        }
+
+        // Inverse CDF (approximate via binary search to 4 decimals)
+        function inverseNormalCDF(p) {
+            let low = -4, high = 4;
+            for(let i=0; i<50; i++) {
+                let mid = (low + high) / 2;
+                if (normalCDF(mid) < p) low = mid;
+                else high = mid;
+            }
+            return (low + high) / 2;
+        }
+
+        /* --- State Management --- */
+        let currentZ = 1.00;
+        let mode = 'ZtoP'; // 'ZtoP' or 'PtoZ'
+        let shadingMode = 'left'; // 'left', 'right', 'mid'
+        let currentStep = 0;
+        let presentationMode = false;
+        
+        // Table element references
+        const zTable = document.getElementById('zTable');
+        const tooltip = document.getElementById('tooltip');
+        let selectedCell = null;
+
+        /* --- Table Generation --- */
+        function initTable() {
+            let thead = '<thead><tr><th>Z</th>';
+            for(let c=0; c<=9; c++) thead += `<th>.0${c}</th>`;
+            thead += '</tr></thead>';
+            
+            let tbody = '<tbody>';
+            // Following the attachment: Rows from 0.0 to 3.5[cite: 1]
+            for(let r=0; r<=35; r++) {
+                let zRow = (r/10).toFixed(1);
+                tbody += `<tr><th>${zRow}</th>`;
+                for(let c=0; c<=9; c++) {
+                    let zVal = r/10 + c/100;
+                    // The table attached provides area between 0 and z[cite: 1]
+                    let area = normalCDF(zVal) - 0.5;
+                    // Format to exactly .XXXX without leading zero to match standard aesthetics[cite: 1]
+                    let strVal = area.toFixed(4).replace(/^0\./, '.'); 
+                    tbody += `<td data-z="${zVal}" data-row="${r}" data-col="${c}" tabindex="0">${strVal}</td>`;
+                }
+                tbody += `</tr>`;
+            }
+            tbody += '</tbody>';
+            zTable.innerHTML = thead + tbody;
+
+            // Event Listeners for Table Interactions
+            zTable.addEventListener('mouseover', handleCellHover);
+            zTable.addEventListener('mouseout', clearHover);
+            zTable.addEventListener('click', handleCellClick);
+            zTable.addEventListener('focusin', handleCellHover);
+            zTable.addEventListener('keydown', (e) => {
+                if(e.key === 'Enter') handleCellClick(e);
+            });
+        }
+
+        function handleCellHover(e) {
+            if(e.target.tagName !== 'TD') return;
+            let td = e.target;
+            let rowIdx = td.parentElement.rowIndex;
+            let colIdx = td.cellIndex;
+            
+            // Highlight headers
+            zTable.rows[rowIdx].cells[0].classList.add('hl-row');
+            zTable.rows[0].cells[colIdx].classList.add('hl-col');
+            
+            // Tooltip
+            let z = parseFloat(td.getAttribute('data-z'));
+            let val = td.innerText;
+            let rect = td.getBoundingClientRect();
+            tooltip.innerHTML = `z = ${z.toFixed(2)} &rarr; P(0&lt;Z&lt;z) = ${val}`;
+            tooltip.style.left = (rect.left + rect.width/2) + 'px';
+            tooltip.style.top = (rect.top - 5) + 'px';
+            tooltip.style.opacity = 1;
+        }
+
+        function clearHover(e) {
+            if(e.target.tagName !== 'TD') return;
+            document.querySelectorAll('.hl-row, .hl-col').forEach(el => {
+                el.classList.remove('hl-row', 'hl-col');
+            });
+            tooltip.style.opacity = 0;
+        }
+
+        function handleCellClick(e) {
+            if(e.target.tagName !== 'TD') return;
+            if(mode === 'PtoZ') return; // Don't auto-update z in practice mode
+            
+            let zVal = parseFloat(e.target.getAttribute('data-z'));
+            // If dragging handle is negative, preserve sign if user clicks the table
+            if(currentZ < 0) currentZ = -zVal;
+            else currentZ = zVal;
+            
+            updateAllFromZ();
+        }
+
+        function highlightTableCell(z) {
+            if(selectedCell) selectedCell.classList.remove('hl-cell');
+            
+            let absZ = Math.abs(z);
+            if(absZ > 3.59) return; // Outside table bounds[cite: 1]
+            
+            let row = Math.floor(absZ * 10);
+            let col = Math.round((absZ * 100) % 10);
+            
+            // Safety bounds
+            if(row > 35) row = 35;
+            
+            let cell = zTable.rows[row + 1].cells[col + 1];
+            if(cell) {
+                cell.classList.add('hl-cell');
+                selectedCell = cell;
+                // Scroll into view if needed (smooth)
+                cell.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
+
+        /* --- Graph Drawing & Interaction --- */
+        const svg = document.getElementById('svgGraph');
+        const W = 800, H = 250, Y_BASE = 210, Y_PEAK = 20;
+        
+        function mapX(z) { return 400 + (z * 90); } // -4 to 4 spans roughly 720px
+        function mapY(pdf) { return Y_BASE - (pdf / 0.4) * (Y_BASE - Y_PEAK); }
+
+        function initGraph() {
+            // Draw bell curve path
+            let d = "";
+            for(let z = -4; z <= 4; z += 0.05) {
+                let x = mapX(z);
+                let y = mapY(normalPDF(z));
+                d += (z === -4 ? "M " : "L ") + `${x},${y} `;
+            }
+            document.getElementById('bellCurve').setAttribute('d', d);
+
+            // Draw ticks
+            let ticksHTML = "";
+            for(let z = -3; z <= 3; z++) {
+                let x = mapX(z);
+                ticksHTML += `<line x1="${x}" y1="${Y_BASE}" x2="${x}" y2="${Y_BASE+5}" class="tick"></line>`;
+                if(z !== 0) {
+                    ticksHTML += `<text x="${x}" y="${Y_BASE+20}" class="tick-label">${z}</text>`;
+                }
+            }
+            document.getElementById('ticks').innerHTML = ticksHTML;
+
+            // Setup Drag
+            let isDragging = false;
+            let markerGroup = document.getElementById('markerGroup');
+            
+            markerGroup.addEventListener('mousedown', (e) => { isDragging = true; });
+            document.addEventListener('mouseup', () => { isDragging = false; });
+            document.addEventListener('mousemove', (e) => {
+                if(!isDragging || mode === 'PtoZ') return;
+                
+                let pt = svg.createSVGPoint();
+                pt.x = e.clientX;
+                pt.y = e.clientY;
+                let svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+                
+                let newZ = (svgP.x - 400) / 90;
+                newZ = Math.max(-3.99, Math.min(3.99, newZ));
+                currentZ = Math.round(newZ * 100) / 100; // Snap to 2 decimals
+                
+                updateAllFromZ();
+            });
+        }
+
+        function generateShadePath(zStart, zEnd) {
+            if(zStart >= zEnd) return "";
+            zStart = Math.max(-4, zStart);
+            zEnd = Math.min(4, zEnd);
+            
+            let d = `M ${mapX(zStart)},${Y_BASE} `;
+            for(let z = zStart; z <= zEnd; z += 0.05) {
+                d += `L ${mapX(z)},${mapY(normalPDF(z))} `;
+            }
+            // Ensure we hit the exact endpoint
+            d += `L ${mapX(zEnd)},${mapY(normalPDF(zEnd))} `;
+            d += `L ${mapX(zEnd)},${Y_BASE} Z`;
+            return d;
+        }
+
+        function updateGraph() {
+            let x = mapX(currentZ);
+            document.getElementById('markerLine').setAttribute('x1', x);
+            document.getElementById('markerLine').setAttribute('x2', x);
+            document.getElementById('markerHandle').setAttribute('cx', x);
+            document.getElementById('markerLabel').setAttribute('x', x);
+            document.getElementById('markerLabel').textContent = `z = ${currentZ.toFixed(2)}`;
+
+            // Update shading paths
+            document.getElementById('shadeLeft').setAttribute('d', generateShadePath(-4, currentZ));
+            document.getElementById('shadeRight').setAttribute('d', generateShadePath(currentZ, 4));
+            
+            let midStart = Math.min(0, currentZ);
+            let midEnd = Math.max(0, currentZ);
+            document.getElementById('shadeMid').setAttribute('d', generateShadePath(midStart, midEnd));
+
+            // Highlight active shading based on shadingMode
+            ['shadeLeft', 'shadeRight', 'shadeMid'].forEach(id => document.getElementById(id).classList.remove('shade-active'));
+            if(shadingMode === 'left') document.getElementById('shadeLeft').classList.add('shade-active');
+            if(shadingMode === 'right') document.getElementById('shadeRight').classList.add('shade-active');
+            if(shadingMode === 'mid') document.getElementById('shadeMid').classList.add('shade-active');
+        }
+
+        /* --- UI Updates --- */
+        function updateAllFromZ() {
+            // Readouts
+            let pLeft = normalCDF(currentZ);
+            let pRight = 1 - pLeft;
+            let pMid = Math.abs(pLeft - 0.5); // Area from 0 to z[cite: 1]
+
+            document.getElementById('valLeft').innerText = pLeft.toFixed(4);
+            document.getElementById('valRight').innerText = pRight.toFixed(4);
+            document.getElementById('valMid').innerText = pMid.toFixed(4);
+
+            document.getElementById('zInput').value = currentZ.toFixed(2);
+            
+            updateGraph();
+            highlightTableCell(currentZ);
+            buildCoachingSteps();
+        }
+
+        // Input manual update
+        document.getElementById('zInput').addEventListener('change', (e) => {
+            let val = parseFloat(e.target.value);
+            if(!isNaN(val)) {
+                currentZ = Math.max(-3.99, Math.min(3.99, val));
+                updateAllFromZ();
+            }
+        });
+
+        function setShadingMode(type) {
+            shadingMode = type;
+            ['roLeft', 'roMid', 'roRight'].forEach(id => document.getElementById(id).classList.remove('active'));
+            let map = { 'left': 'roLeft', 'mid': 'roMid', 'right': 'roRight' };
+            document.getElementById(map[type]).classList.add('active');
+            updateGraph();
+        }
+
+        function setMode(newMode) {
+            mode = newMode;
+            document.getElementById('modeZtoP').classList.toggle('active', mode === 'ZtoP');
+            document.getElementById('modePtoZ').classList.toggle('active', mode === 'PtoZ');
+            
+            document.getElementById('inputZGroup').style.display = mode === 'ZtoP' ? 'flex' : 'none';
+            document.getElementById('readoutsArea').style.display = mode === 'ZtoP' ? 'flex' : 'none';
+            document.getElementById('inputPGroup').style.display = mode === 'PtoZ' ? 'flex' : 'none';
+            
+            if(mode === 'PtoZ') {
+                shadingMode = 'left';
+                if(selectedCell) selectedCell.classList.remove('hl-cell'); // Clear selection to let user find it
+                // Set to default for testing
+                let targetP = parseFloat(document.getElementById('pInput').value);
+                currentZ = inverseNormalCDF(targetP); 
+                updateGraph();
+                document.getElementById('markerLabel').textContent = `z = ?`;
+            } else {
+                updateAllFromZ();
+            }
+            
+            buildCoachingSteps();
+        }
+
+        // P to Z Logic
+        document.getElementById('pInput').addEventListener('change', (e) => {
+            let val = parseFloat(e.target.value);
+            if(!isNaN(val)) {
+                val = Math.max(0.0001, Math.min(0.9999, val));
+                e.target.value = val.toFixed(4);
+                currentZ = inverseNormalCDF(val);
+                updateGraph();
+                document.getElementById('markerLabel').textContent = `z = ?`;
+                if(selectedCell) selectedCell.classList.remove('hl-cell');
+            }
+        });
+
+        function checkPtoZ() {
+            let val = parseFloat(document.getElementById('pInput').value);
+            let actualZ = inverseNormalCDF(val);
+            let absActual = Math.abs(actualZ);
+            
+            let row = Math.floor(absActual * 10);
+            let col = Math.round((absActual * 100) % 10);
+            
+            if(row > 35) {
+                alert("Value is off the table edges. Use 0.9999 or 0.0000");
+                return;
+            }
+            
+            alert(`To find z for P=${val.toFixed(4)}:\n1. Convert to table area: |P - 0.5| = ${Math.abs(val - 0.5).toFixed(4)}\n2. Scan table for closest value.\n3. The closest value gives z = ${actualZ.toFixed(2)}.`);
+        }
+
+        function revealPtoZ() {
+            updateAllFromZ();
+        }
+
+        /* --- Coaching / Steps Logic --- */
+        function buildCoachingSteps() {
+            let steps = [];
+            if(mode === 'ZtoP') {
+                let absZ = Math.abs(currentZ);
+                let row = Math.floor(absZ * 10) / 10;
+                let col = Math.round((absZ * 100) % 10) / 100;
+                let area = Math.abs(normalCDF(absZ) - 0.5).toFixed(4);
+
+                steps.push(`<strong>1. Identify the goal:</strong> Find the area for z = ${currentZ.toFixed(2)}.`);
+                if(currentZ < 0) {
+                    steps.push(`<strong>2. Use Symmetry:</strong> Since the table only has positive z values, use z = ${absZ.toFixed(2)}[cite: 1].`);
+                }
+                steps.push(`<strong>3. Find Row:</strong> Look down the left column for ${row.toFixed(1)}.`);
+                steps.push(`<strong>4. Find Column:</strong> Look across the top for ${col.toFixed(2).substring(1)}.`);
+                steps.push(`<strong>5. Intersection:</strong> The table value (Area from mean) is ${area.replace(/^0\./, '.')}[cite: 1].`);
+                
+                if(shadingMode === 'left') {
+                    if(currentZ > 0) steps.push(`<strong>6. Final Calc:</strong> Left tail P = 0.5 + ${area} = ${(0.5 + parseFloat(area)).toFixed(4)}.`);
+                    else steps.push(`<strong>6. Final Calc:</strong> Left tail P = 0.5 - ${area} = ${(0.5 - parseFloat(area)).toFixed(4)}.`);
+                }
+            } else {
+                let targetP = parseFloat(document.getElementById('pInput').value);
+                let tableTarget = Math.abs(targetP - 0.5).toFixed(4);
+                let sign = targetP >= 0.5 ? "+" : "-";
+
+                steps.push(`<strong>1. Sketch & Shade:</strong> You want a left-tail area of ${targetP.toFixed(4)}.`);
+                steps.push(`<strong>2. Convert to Table Area:</strong> The table shows Area from mean[cite: 1]. Target is |${targetP.toFixed(4)} - 0.5| = ${tableTarget}.`);
+                steps.push(`<strong>3. Scan Table Body:</strong> Look for the number closest to ${tableTarget.replace(/^0\./, '.')} inside the grid.`);
+                steps.push(`<strong>4. Assemble Z:</strong> Read the row and column headers for that cell.`);
+                steps.push(`<strong>5. Apply Sign:</strong> Since target is ${targetP >= 0.5 ? "> 0.5" : "< 0.5"}, z must be ${targetP >= 0.5 ? "positive" : "negative"}.`);
+            }
+
+            let ul = document.getElementById('stepList');
+            ul.innerHTML = steps.map((s, i) => `<li class="step-item" id="step-${i}">${s}</li>`).join('');
+            currentStep = 0;
+            if(steps.length > 0) document.getElementById(`step-0`).classList.add('revealed', 'active-step');
+        }
+
+        function nextStep() {
+            let items = document.querySelectorAll('.step-item');
+            if(currentStep < items.length - 1) {
+                document.getElementById(`step-${currentStep}`).classList.remove('active-step');
+                currentStep++;
+                document.getElementById(`step-${currentStep}`).classList.add('revealed', 'active-step');
+            }
+        }
+
+        function resetSteps() {
+            let items = document.querySelectorAll('.step-item');
+            items.forEach((item, i) => {
+                item.className = 'step-item';
+                if(i === 0) item.classList.add('revealed', 'active-step');
+            });
+            currentStep = 0;
+        }
+
+        /* --- Practice Mode --- */
+        let pScore = 0, pStreak = 0;
+        let activeQuestion = null;
+
+        function generateQuestion() {
+            document.getElementById('answerArea').style.display = 'flex';
+            document.getElementById('practiceInput').value = '';
+            document.getElementById('practiceFeedback').innerText = '';
+            
+            // Randomize Type: 0: z->P(left), 1: z->P(right), 2: P(left)->z
+            let type = Math.floor(Math.random() * 3);
+            let z = (Math.random() * 6) - 3; // -3 to 3
+            z = Math.round(z * 100) / 100;
+            
+            activeQuestion = { type: type, z: z };
+
+            let qText = "";
+            if(type === 0) {
+                qText = `Find the probability: <strong>P(Z < ${z.toFixed(2)})</strong>`;
+                activeQuestion.ans = normalCDF(z);
+            } else if (type === 1) {
+                qText = `Find the probability: <strong>P(Z > ${z.toFixed(2)})</strong>`;
+                activeQuestion.ans = 1 - normalCDF(z);
+            } else {
+                let p = normalCDF(z);
+                // Round p to 4 decimals so it maps cleanly back to table
+                p = Math.round(p * 10000) / 10000;
+                qText = `Find the z-score such that <strong>P(Z < z) = ${p.toFixed(4)}</strong>`;
+                activeQuestion.ans = z;
+                activeQuestion.p = p; // for nearest neighbor check
+            }
+            document.getElementById('questionText').innerHTML = qText;
+        }
+
+        function checkPractice() {
+            if(!activeQuestion) return;
+            let input = parseFloat(document.getElementById('practiceInput').value);
+            let feedback = document.getElementById('practiceFeedback');
+            
+            if(isNaN(input)) {
+                feedback.innerText = "Please enter a number.";
+                feedback.className = 'feedback error';
+                return;
+            }
+
+            let correct = false;
+            let diff = Math.abs(input - activeQuestion.ans);
+
+            if(activeQuestion.type === 2) {
+                // Checking Z (allow 0.02 tolerance due to rounding/nearest neighbor)
+                if(diff <= 0.02) correct = true;
+            } else {
+                // Checking Prob (allow 0.0002 tolerance)
+                if(diff <= 0.0002) correct = true;
+            }
+
+            if(correct) {
+                feedback.innerText = "Correct! Great job.";
+                feedback.className = 'feedback success';
+                pScore++;
+                pStreak++;
+                setTimeout(generateQuestion, 1500);
+            } else {
+                feedback.innerText = `Incorrect. Expected approx ${activeQuestion.ans.toFixed(4)}. Try checking your steps!`;
+                feedback.className = 'feedback error';
+                pStreak = 0;
+            }
+            
+            document.getElementById('scoreDisplay').innerText = pScore;
+            document.getElementById('streakDisplay').innerText = pStreak;
+        }
+
+        /* --- Toggles --- */
+        function togglePresentation() {
+            presentationMode = !presentationMode;
+            document.body.classList.toggle('presentation-mode', presentationMode);
+            setTimeout(updateGraph, 100); // Redraw graph after resize
+        }
+
+        function toggleHelp() {
+            let el = document.getElementById('helpPanel');
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        }
+
+        /* --- Initialization --- */
+        window.onload = () => {
+            initTable();
+            initGraph();
+            updateAllFromZ();
+        };
+    </script>
+</body>
+</html>
